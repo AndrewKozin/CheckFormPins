@@ -1,43 +1,62 @@
 import sys, os, datetime
 from PyQt5.QtWidgets import *
-from PyQt5.QtGui import QImage, QPixmap, QPainter, QColor
-from PyQt5.QtCore import QTimer
-import cv2
+from PyQt5.QtGui import *
+from PyQt5.QtCore import *
+import cv2, json
 import numpy as np
 
-class MainWindow(QMainWindow):
+class View(QMainWindow):
+    view_signal = pyqtSignal(str) # Сигнал для передачи текста кнопки
+
     def __init__(self):
         super().__init__()
-        self.scale_percent = 70 # percent of original size для полного заполнения экрана изображениями, не влияет на измерение
-        self.mul = 0.569#597 отношение длины к количеству пикселов на длину
-        self.my_path = './patterns'
+        self.frame = None
         self.combo_msg_add_patt = 'Добавьте чертежи в папку patterns'
         self.combo_msg_calibrovka = 'Калибровка и измерения'
+        self.envir = {'my_setting':'./setting.cfg',
+                      'scale_percent':70, 
+                      'mul':0.569, 
+                      'path':'./patterns',
+                      'high':600,
+                      'width':600,
+                      }
+        if os.path.exists(self.envir['my_setting']):
+            try:
+                config = self.load_config()
+                if config  is not None:
+                    self.envir = config
+            except:
+                print('Файл с конфигурацией содержит ошибки')
+        self.initUI()
 
+    def initUI(self):
         self.setWindowTitle("Компьютерное зрение на службе ООО ФЛИМ")
-        self.setGeometry(100, 100, 800, 600)
+        self.set_geomenty_window()
+        # self.setGeometry(50, 100, 800, 600)
 
         # Создание виджета
-        widget = QWidget(self)
+        widget = QTabWidget(self)
         self.setCentralWidget(widget)
 
-        # Создание компонентов интерфейса
+        # Создание компонентов интерфейса cam_tab
         label_webcam = QLabel("Webcam Image:", self)
-        self.label_webcam_image = QLabel(self)
+        self.label_webcam_image = QLabel()
         label_file = QLabel("File Image:", self)
-        self.label_file_image = QLabel(self)
-        self.current_dt = QLabel("дата и время:", self)
-        self.combo_patt_select = QComboBox(self)
+        self.label_file_image = QLabel()
+        self.current_dt = QLabel("дата и время:")
+        self.combo_patt_select = QComboBox()
+        button_exit = QPushButton("Exit", self)
+        
+        # Описане событий cam_tab
         self.combo_patt_select.addItem(self.combo_msg_add_patt)
-        if os.path.exists(self.my_path):
+        if os.path.exists(self.envir['path']):
             self.add_itm_combo()
         self.combo_patt_select.activated.connect(self.load_patt)
-
-        button_exit = QPushButton("Exit", self)
         button_exit.clicked.connect(self.exit_application)
 
-        # Создание компоновщика
-        root_layout = QVBoxLayout(widget)
+        # Создание компоновщика cam_tab
+        cam_tab = QWidget()
+        root_layout = QVBoxLayout(cam_tab)
         first_layout = QHBoxLayout()
         second_layout = QHBoxLayout()
         thirth_layout = QHBoxLayout()
@@ -54,18 +73,83 @@ class MainWindow(QMainWindow):
         thirth_layout.addWidget(self.current_dt)
         fourth_layout.addWidget(button_exit)
 
-        self.load_patt()
+        # Создание компонентов интерфейса setting_tab
+        self.settings = QTextEdit()
+        formatted_json = json.dumps(self.envir, indent=4, ensure_ascii=False).encode('utf-8').decode('utf-8')
+        self.settings.setPlainText(formatted_json)
+        self.settings.textChanged.connect(lambda: self.view_signal.emit('Изменть конфиг'))
+        self.btn_save = QPushButton("Нет изменений конфигурации")
+        self.btn_save.pressed.connect(lambda: self.view_signal.emit('Сохранить конфиг')) 
+
+        # Создание компановщика setting_tab
+        setting_tab = QWidget(self)
+        setting_layout = QVBoxLayout(setting_tab)
+        setting_layout.addWidget(self.settings)
+        setting_layout.addWidget(self.btn_save)
+
+        # Создание компонентов интерфейса help_tab
+        self.text_help = QTextEdit()
+        self.text_help.setPlainText(self.create_text_help())
+
+        # Создание компановщика
+        help_tab = QWidget(self)
+        help_lyaout = QVBoxLayout(help_tab)
+        help_lyaout.addWidget(self.text_help)
+
+
+        widget.addTab(cam_tab, "Измерение")
+        widget.addTab(setting_tab, "Настройки")
+        widget.addTab(help_tab, "Справка")
+        
+        
 
         # Запуск видеопотока с веб-камеры
-        self.video_capture = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+        self.video_capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        print("Подключена веб-камера 0")
+        if not self.video_capture.isOpened():
+           self.video_capture = cv2.VideoCapture(1, cv2.CAP_DSHOW) 
+           print("Подключена веб-камера 1")
+
+        
+        self.load_patt()
         self.video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 2592)#2048
         self.video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 1944)#1536
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(50)
+        
+    def set_geomenty_window(self):
+        self.setGeometry(50, 100, int(self.envir['width']), int(self.envir['high']))
 
+    def load_config(self):
+        my_setting = self.envir['my_setting']
+        with open(my_setting, 'r') as file:
+            params = json.load(file)
+        return params
+    
+    def create_text_help(self):
+        text = """
+Программа предназначена для оптического распознования контура детали, сравнения контура с шаблоном, измерения параметров контура: длина, ширина, радиус.
+Версия 1.0.0.0
+Изменения 1.0.0.0
+Добавлены закладки Измерение, Настройки, Справка
+
+Выберите из списка шаблон для сравнения с контруром измеряемой детали.
+Выберите из списка режим "Калибровка и измерения". Результаты измерения будут показаны в строке состояния.
+Радиус величина расчетная и может быть расчитан только по трем точкам пересечения измеряемой дуги с осями измерения.
+Для калибровки шаблона отключите микроскоп, выберите из списка шаболон, перейдите в режим "Калибровка и измерения".
+
+Назначение параметров конфигурации
+"scale_percent": 70, размер картинки в долях от 100%
+"mul": 0.569, соотношение размера в сотых долях милиметра к размеру в пикселах 
+"path": "./patterns", директория для хранения шаблонов
+"high":600 минимальное значение высоты окна
+"width":600 минимальное значение ширины окна
+"""
+        return text
+    
     def add_itm_combo(self):
-        my_path = self.my_path
+        my_path = self.envir['path']
         if os.path.exists(my_path):
             my_files = os.listdir(my_path)
             if len(my_files) != 0:
@@ -102,8 +186,13 @@ class MainWindow(QMainWindow):
             self.label_file_image.setPixmap(QPixmap.fromImage(q_image))
 
     def create_img(self):
-        col = self.frame_shape[1]
-        row = self.frame_shape[0]
+        # self.frame = frame[300:1100, 700:2000]
+        if self.frame is None:
+            col = 1300
+            row = 800
+        else:
+            col = self.frame_shape[1]
+            row = self.frame_shape[0]
         img = np.uint8(np.ones((row, col)) * 255)
         self.rule_x = col-col//3
         self.rule_y = row//2
@@ -137,14 +226,16 @@ class MainWindow(QMainWindow):
         dic_x = dict(zip(ys, xs))
         point_x = [i for i in dic_y if dic_y[i]==self.rule_y]
         point_y = [i for i in dic_x if dic_x[i]==self.rule_x]
-        measure_x = np.max(point_x)-np.min(point_x)
-        measure_y = np.max(point_y)-np.min(point_y)
-        h = np.max(point_x) - self.rule_x
-        len_h = round(round(h*self.mul, 1)/100, 3)
-        len_x = round(round(measure_x*self.mul, 1)/100, 3)
-        len_y = round(round(measure_y*self.mul, 1)/100, 3)
-        radius = round(((measure_y**2)/(h*4)+h)/2, 1) # в пикселах
-        len_r = round(round(radius*self.mul, 1)/100, 3) # в сотках
+        try:
+            measure_x = np.max(point_x)-np.min(point_x)
+            measure_y = np.max(point_y)-np.min(point_y)
+            h = np.max(point_x) - self.rule_x
+            len_x = round(round(measure_x*self.envir['mul'], 1)/100, 3)
+            len_y = round(round(measure_y*self.envir['mul'], 1)/100, 3)
+            radius = round(((measure_y**2)/(h*4)+h)/2, 1) # в пикселах
+            len_r = round(round(radius*self.envir['mul'], 1)/100, 3) # в сотках
+        except ValueError:
+            len_x = len_y = len_r = 0
 
         return len_x, len_y, len_r
     
@@ -173,7 +264,7 @@ class MainWindow(QMainWindow):
         else:
             frame = cv2.imread('./patt.jpg')
             frame_copy = frame.copy()
-        is_wiev = False
+        is_view = False
         self.frame_shape = frame.shape
 
         gray_def = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -182,13 +273,13 @@ class MainWindow(QMainWindow):
             frame = self.find_center(frame) #
 
             # self.frame_shape = frame.shape
-            is_wiev = True
+            is_view = True
             if self.combo_patt_select.currentText() == self.combo_msg_calibrovka:
                 frame = self.measure(frame)
             else:
                 self.statusBar().showMessage(f'Ширина {frame.shape[1]} сравнить с 2048')
         
-        if is_wiev:
+        if is_view:
 
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
             # Делаем фон кадра прозрачным
@@ -212,8 +303,8 @@ class MainWindow(QMainWindow):
         self.label_file_image.setPixmap(QPixmap.fromImage(image_copy)) # label_webcam_image
 
     def downscale(self, img):
-        width = int(img.shape[1] * self.scale_percent / 100)
-        height = int(img.shape[0] * self.scale_percent / 100)
+        width = int(img.shape[1] * self.envir['scale_percent'] / 100)
+        height = int(img.shape[0] * self.envir['scale_percent'] / 100)
         dim = (width, height)
         # resize image
         resized = cv2.resize(img, dim, interpolation = cv2.INTER_AREA)
@@ -264,27 +355,27 @@ class MainWindow(QMainWindow):
 
         # устанавливаем длину шаблона на основе знания номера чертежа
         if '001' in img_path.split('.'):
-            length = 415# длина 27.01.000.98.02.001 в сотках 0.01 976px
-            k_fact = 0.42520/1.0045 # Коэффициент введен по результатам замера шаблона
-            k_chert = self.mul
+            length = 415# 27.01.000.98.02.001 длина в сотках 0.01, 976px(979х588) длина в пикселах
+            k_fact = 0.42520/1.0045 # Коэффициент введен по результатам замера шаблона 0.01мм/976рх
+            k_chert = self.envir['mul']
             k_resize = k_chert/k_fact
         elif '002' in img_path.split('.'):
-            length = 455# длина 27.01.000.98.02.002 в сотках 0.01 1070px
+            length = 455# 27.01.000.98.02.002 длина  в сотках 0.01, 1070px(1073х589)  длина в пикселах
             k_fact = 0.42523/1.005 # Коэффициент введен по результатам замера шаблона
-            k_chert = self.mul
+            k_chert = self.envir['mul']
             k_resize = k_chert/k_fact
         elif '003' in img_path.split('.'):
-            length = 495# длина 27.01.000.98.02.003 в сотках 0.01 1165px
+            length = 495# 27.01.000.98.02.003 длина в сотках 0.01, 1165px(1168х590) длина в пикселах
             k_fact = 0.42489/1.0045 # Коэффициент введен по результатам замера шаблона
-            k_chert = self.mul
+            k_chert = self.envir['mul']
             k_resize = k_chert/k_fact
         elif '004' in img_path.split('.'):
-            length = 535# длина 27.01.000.98.02.004 в сотках 0.01 1259px
+            length = 535# 27.01.000.98.02.004 длина в сотках 0.01,  1259px(1262х589) длина в пикселах
             k_fact = 0.42494/1.004 # Коэффициент введен по результатам замера шаблона
-            k_chert = self.mul
+            k_chert = self.envir['mul']
             k_resize = k_chert/k_fact
         elif '005' in img_path.split('.'):
-            length = 2800# длина 27.07.004.01.01.005 в сотках 0.01 495px
+            length = 2800# 27.07.004.01.01.005 длина в сотках 0.01, 495px длина в пикселах
             k_fact = 5.65657 # 2800/495
             k_chert = 3.34478
             k_resize = k_chert/k_fact
@@ -293,7 +384,7 @@ class MainWindow(QMainWindow):
             k_fact = 1.0 # 2800/495
             k_chert = 1.0
             k_resize = k_chert/k_fact
-
+        print('Коэффициент масштабирования', k_resize)
         # уменьшаем размер шаблона до размера и детали
         img_patt = cv2.resize(img_patt,(int(img_patt.shape[1]/k_resize), int(img_patt.shape[0]/k_resize)), cv2.INTER_NEAREST)
 
@@ -333,8 +424,80 @@ class MainWindow(QMainWindow):
     def exit_application(self):
         QApplication.quit()
 
+class Presenter():
+    def __init__(self, model, view):
+        self.data = None
+        self.model = model
+        self.view = view
+        view.view_signal.connect(self.press_btn) # Подключение сигнала к методу
+        # self.is_changed = False
+
+    def press_btn(self, btn_text): 
+        match btn_text:
+            case 'Изменть конфиг':
+                print(f'Произошло событие {btn_text}')
+                # if self.is_changed:
+                print('Изменена конфигурация')
+                txt = self.view.settings.toPlainText()
+                self.is_none = self.model.text_to_dict(txt)
+                if self.is_none is None:
+                    self.view.btn_save.setText('Отменить изменения конфигурации, Ctrl+Z')
+                else:
+                    self.view.btn_save.setText('Сохранить изменения конфигурации')
+                # self.is_changed = True
+            case 'Сохранить конфиг':
+                print(f'Произошло событие {btn_text}')
+                # if self.is_changed:
+                if self.is_none is None:
+                    self.view.settings.undo()
+                else:
+                    # self.is_changed = False
+                    self.view.btn_save.setText('Нет изменений конфигурации')
+                    txt = self.view.settings.toPlainText()
+                    dic = self.model.text_to_dict(txt)
+                    self.model.save_config(self.view, dic)
+                    self.view.envir = self.view.load_config()
+                    # formatted_json = json.dumps(self.view.envir, indent=4, ensure_ascii=False)
+                    # self.view.settings.setPlainText(formatted_json)
+                self.view.set_geomenty_window()
+            case _:
+                print(f'Отсутствует обработчик для события {btn_text}')
+
+class Model():
+    def __init__(self):
+        pass
+    
+    def text_to_dict(self, text):
+        data = None
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
+            else:
+                print("Ошибка: Текст не может быть преобразован в словарь.")
+        except json.JSONDecodeError as e:
+            print(f"Ошибка: Неверный формат JSON. {str(e)}")
+
+    def save_config(self, view, params):
+        my_setting = view.envir['my_setting']
+        with open(my_setting, 'w') as file:
+            json.dump(params, file)
+
 if __name__ == "__main__":
+    # pyinstaller --add-data="check.ico;." -i check.ico -n CheckFormPins -F main.py
+    if getattr(sys, 'frozen', False):
+        application_path = sys._MEIPASS
+    elif __file__:
+        application_path = os.path.dirname(__file__)
+
+    iconFile = "./check.ico"
+    path_ico = os.path.join(application_path, iconFile)
+    # 
     app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
+    if os.path.exists(path_ico):
+        app.setWindowIcon(QIcon(path_ico))
+    view = View()
+    model = Model()
+    presenter = Presenter(model, view)
+    view.show()
     sys.exit(app.exec_())
